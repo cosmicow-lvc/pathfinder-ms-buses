@@ -2,6 +2,13 @@
 
 Microservicio Go responsable de la administración de buses y conductores.
 
+## Contratos vigentes
+
+Los estados publicados y aceptados siguen `schema.graphql`: `ACTIVO`,
+`INACTIVO` y `EN_MANTENCION`. Se admite compatibilidad de entrada con los
+nombres heredados en minúsculas. El evento vigente es `bus.status.changed` y
+la migración `000004` normaliza los datos existentes.
+
 El esquema define IDs UUID para `driver` y `buses`; cada bus requiere un
 conductor, y un conductor puede estar asociado a varios buses. `outbox` es una
 tabla independiente, sin claves foráneas hacia esas tablas.
@@ -13,15 +20,18 @@ conductor lo desactiva (`activo = false`) para conservar sus datos.
 
 ## Kafka
 
-El contrato de mensajes, topicos y respuestas esta documentado en
-[docs/kafka-contracts.md](./docs/kafka-contracts.md). Los consumidores de
-comandos del BFF y validaciones de Rutas estan conectados. La validacion
-`bus.validate.v1` responde por el `replyTo` permitido, conserva el
-`correlationId` y solo considera valido un bus existente con estado `activo`.
-Cuando cambia el estado de un bus, la actualizacion y el evento
-`bus.status.changed.v1` se guardan en la misma transaccion. Un publisher en
-goroutine envia los eventos pendientes a `buses.events.v1` y reintenta ante
-fallos.
+El contrato completo esta documentado en
+[docs/kafka-contracts.md](./docs/kafka-contracts.md). `ms-buses` consume tanto
+los topics modernos (`buses.bus.*`, `buses.driver.*`, `bus.validate`) como los
+canales heredados (`buses.commands.v1` y
+`buses.validation.requests.v1`).
+
+La validacion `bus.validate` responde por el `replyTo` autorizado y conserva el
+`correlationId`. Solo considera disponible un bus existente con estado
+`ACTIVO`. Cuando cambia el estado, la actualizacion y el evento
+`bus.status.changed` se guardan en la misma transaccion. El publisher envia los
+eventos pendientes al topic vigente, conserva compatibilidad con
+`buses.events.v1` y reintenta ante fallos.
 
 ## Migraciones
 
@@ -111,7 +121,7 @@ docker compose -f compose.test.yml exec kafka /opt/kafka/bin/kafka-console-consu
 ```
 
 ```powershell
-docker compose -f compose.test.yml exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:29092 --topic buses.events.v1 --from-beginning --property print.key=true
+docker compose -f compose.test.yml exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:29092 --topic bus.status.changed --from-beginning --property print.key=true
 ```
 
 Desde otra terminal, crea un conductor en `buses.commands.v1`. La respuesta
@@ -152,7 +162,7 @@ valores devueltos en las respuestas anteriores:
 ```
 
 La respuesta del cambio llega a `bff.replies.v1` y el evento
-`bus.status.changed.v1` a `buses.events.v1`. Vuelve a publicar
+`bus.status.changed` a `bus.status.changed`. Vuelve a publicar
 `bus.validate.v1` con nuevos `messageId` y `correlationId`: debe responder
 `valid: false`.
 

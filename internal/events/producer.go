@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/segmentio/kafka-go"
@@ -36,7 +37,18 @@ func (p *Producer) PublishTo(ctx context.Context, topic string, key, value []byt
 	if topic == "" {
 		return fmt.Errorf("publish kafka message: topic is required")
 	}
-	if err := p.writer.WriteMessages(ctx, kafka.Message{Topic: topic, Key: key, Value: value}); err != nil {
+	var envelope struct {
+		CorrelationID string `json:"correlationId"`
+	}
+	_ = json.Unmarshal(value, &envelope)
+	headers := []kafka.Header(nil)
+	if envelope.CorrelationID != "" {
+		headers = append(headers,
+			kafka.Header{Key: "x-correlation-id", Value: []byte(envelope.CorrelationID)},
+			kafka.Header{Key: "kafka_correlationId", Value: []byte(envelope.CorrelationID)},
+		)
+	}
+	if err := p.writer.WriteMessages(ctx, kafka.Message{Topic: topic, Key: key, Value: value, Headers: headers}); err != nil {
 		return fmt.Errorf("publish kafka message: %w", err)
 	}
 	return nil

@@ -27,6 +27,15 @@ func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	}))
 }
 
+func NewGroupConsumer(brokers, topics []string, groupID string) *Consumer {
+	return newConsumer(kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		GroupTopics:    topics,
+		GroupID:        groupID,
+		CommitInterval: 0,
+	}))
+}
+
 func newConsumer(reader kafkaReader) *Consumer {
 	return &Consumer{reader: reader}
 }

@@ -50,7 +50,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        for topic in buses.commands.v1 buses.validation.requests.v1 buses.events.v1 bff.replies.v1 routes.replies.v1; do
+        for topic in buses.driver.list buses.driver.create buses.bus.list buses.bus.get buses.bus.create buses.bus.change-status buses.commands.v1 bus.validate bus.status.changed travel.created buses.validation.requests.v1 buses.events.v1 bff.replies.v1 routes.replies.v1 bus.validate.reply; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic "$$topic" --partitions 1 --replication-factor 1
         done
     depends_on:
@@ -131,10 +131,10 @@ services:
       PORT: "8080"
       POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/pathfinder?sslmode=disable
       KAFKA_BROKERS: kafka:29092
-      KAFKA_TOPIC: buses.events.v1
+      KAFKA_TOPIC: bus.status.changed
       KAFKA_BFF_COMMANDS_TOPIC: buses.commands.v1
       KAFKA_BUS_VALIDATION_TOPIC: buses.validation.requests.v1
-      KAFKA_REPLY_TOPICS: bff.replies.v1,routes.replies.v1
+      KAFKA_REPLY_TOPICS: bff.replies.v1,routes.replies.v1,bus.validate.reply
       KAFKA_CONSUMER_GROUP: pathfinder-buses-bff-v1
       KAFKA_ROUTES_CONSUMER_GROUP: pathfinder-buses-routes-v1
     ports:

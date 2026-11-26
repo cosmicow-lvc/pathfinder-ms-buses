@@ -77,6 +77,43 @@ func TestRoutesValidationKafkaHandlerRepliesWithCorrelatedValidation(t *testing.
 	}
 }
 
+func TestRoutesValidationKafkaHandlerSupportsModernBusValidateType(t *testing.T) {
+	status := domain.BusStatusActive
+	svc := &routeValidationServiceStub{
+		result: domain.BusValidation{
+			BusID:     "123e4567-e89b-12d3-a456-426614174000",
+			Valid:     true,
+			Exists:    true,
+			Available: true,
+			Estado:    &status,
+		},
+	}
+	publisher := &replyPublisherStub{}
+	h, err := NewRoutesValidationKafkaHandler(svc, publisher, []string{"bus.validate.reply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := `{
+		"messageId":"modern-request",
+		"correlationId":"modern-correlation",
+		"type":"bus.validate",
+		"replyTo":"bus.validate.reply",
+		"data":{"busId":"123e4567-e89b-12d3-a456-426614174000"}
+	}`
+	if err := h.Handle(context.Background(), kafka.Message{Value: []byte(request)}); err != nil {
+		t.Fatal(err)
+	}
+
+	var response responseEnvelope
+	if err := json.Unmarshal(publisher.payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != nil || response.CorrelationID != "modern-correlation" {
+		t.Fatalf("unexpected modern validation response: %+v", response)
+	}
+}
+
 func TestRoutesValidationKafkaHandlerReturnsInvalidRequestForMissingBusID(t *testing.T) {
 	svc := &routeValidationServiceStub{}
 	publisher := &replyPublisherStub{}

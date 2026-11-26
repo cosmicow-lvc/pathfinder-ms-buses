@@ -87,11 +87,13 @@ func (s *Service) ValidateBus(ctx context.Context, id string) (domain.BusValidat
 	}
 
 	result.Estado = &bus.Estado
+	result.Exists = true
 	if bus.Estado != domain.BusStatusActive {
 		result.Reason = stringPointer(domain.BusValidationReasonInactive)
 		return result, nil
 	}
 	result.Valid = true
+	result.Available = true
 	return result, nil
 }
 
@@ -182,7 +184,10 @@ func normalizeBus(input domain.BusInput) (domain.Bus, error) {
 		DriverID: strings.TrimSpace(input.DriverID),
 		Patente:  strings.ToUpper(strings.TrimSpace(input.Patente)),
 		Empresa:  strings.TrimSpace(input.Empresa),
-		Estado:   strings.TrimSpace(input.Estado),
+		Estado:   normalizeBusStatus(input.Estado),
+	}
+	if bus.Estado == "" {
+		bus.Estado = domain.BusStatusActive
 	}
 	if !validUUID(bus.DriverID) {
 		return domain.Bus{}, fmt.Errorf("%w: driver_id", domain.ErrInvalidInput)
@@ -196,6 +201,19 @@ func normalizeBus(input domain.BusInput) (domain.Bus, error) {
 		return domain.Bus{}, domain.ErrInvalidInput
 	}
 	return bus, nil
+}
+
+func normalizeBusStatus(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ACTIVO", "ACTIVA":
+		return domain.BusStatusActive
+	case "INACTIVO", "INACTIVA":
+		return domain.BusStatusInactive
+	case "EN_MANTENCION", "MANTENCION", "MANTENIMIENTO":
+		return domain.BusStatusMaintenance
+	default:
+		return strings.TrimSpace(status)
+	}
 }
 
 func normalizeDriver(nombre, telefono, rut string) (domain.Driver, error) {

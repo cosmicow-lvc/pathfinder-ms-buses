@@ -52,7 +52,27 @@ func NewRoutesValidationKafkaHandler(
 func (h *RoutesValidationKafkaHandler) Handle(ctx context.Context, message kafka.Message) error {
 	var request requestEnvelope
 	if err := json.Unmarshal(message.Value, &request); err != nil {
-		return fmt.Errorf("decode Routes validation request: %w", err)
+		return nil
+	}
+	if request.Type == "" && (message.Topic == "bus.validate" || message.Topic == "buses.validation.requests.v1") {
+		request.Type = "bus.validate"
+		if len(request.Data) == 0 {
+			request.Data = message.Value
+		}
+	}
+	if request.CorrelationID == "" {
+		request.CorrelationID = headerValue(message.Headers, "x-correlation-id")
+		if request.CorrelationID == "" {
+			request.CorrelationID = headerValue(message.Headers, "kafka_correlationId")
+		}
+	}
+	if request.ReplyTo == "" {
+		request.ReplyTo = headerValue(message.Headers, "kafka_replyTopic")
+	}
+	if request.CorrelationID == "" {
+		if generated, err := newMessageID(); err == nil {
+			request.CorrelationID = generated
+		}
 	}
 	if request.CorrelationID == "" || request.ReplyTo == "" {
 		return errors.New("Routes validation request is missing correlationId or replyTo")
@@ -62,7 +82,7 @@ func (h *RoutesValidationKafkaHandler) Handle(ctx context.Context, message kafka
 	}
 
 	result := commandResult{err: domain.ErrInvalidInput}
-	if request.MessageID != "" && request.Type == "bus.validate.v1" {
+	if request.MessageID != "" && (request.Type == "bus.validate.v1" || request.Type == "bus.validate") {
 		var input struct {
 			BusID string `json:"busId"`
 		}
