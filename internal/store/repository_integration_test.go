@@ -32,7 +32,9 @@ func TestPostgresRepositoryCRUD(t *testing.T) {
 	patente := "TEST-" + suffix
 
 	t.Cleanup(func() {
-		if _, err := repo.pool.Exec(context.Background(), `DELETE FROM buses WHERE patente = $1`, patente); err != nil {
+		if _, err := repo.pool.Exec(context.Background(), `
+			DELETE FROM buses WHERE patente = $1 OR patente = $2`,
+			patente, patente+"-INVALID"); err != nil {
 			t.Errorf("clean up test bus: %v", err)
 		}
 		if _, err := repo.pool.Exec(context.Background(), `DELETE FROM driver WHERE rut = $1`, rut); err != nil {
@@ -77,6 +79,14 @@ func TestPostgresRepositoryCRUD(t *testing.T) {
 	}
 	if bus.ID == "" || bus.DriverID != driver.ID {
 		t.Fatalf("unexpected created bus: %+v", bus)
+	}
+	if _, err := repo.CreateBus(ctx, domain.Bus{
+		DriverID: driver.ID,
+		Patente:  patente + "-INVALID",
+		Empresa:  "Invalid status",
+		Estado:   "disponible",
+	}); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected database status constraint error, got %v", err)
 	}
 	t.Cleanup(func() {
 		if _, err := repo.pool.Exec(context.Background(), `DELETE FROM outbox WHERE payload->'data'->>'busId' = $1`, bus.ID); err != nil {

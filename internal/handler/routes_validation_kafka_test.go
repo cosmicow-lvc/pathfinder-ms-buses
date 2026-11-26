@@ -135,3 +135,48 @@ func TestRoutesValidationKafkaHandlerReturnsInternalError(t *testing.T) {
 		t.Fatalf("expected INTERNAL_ERROR response, got %+v", response.Error)
 	}
 }
+
+func TestRoutesValidationKafkaHandlerReportsUnsupportedAndPublishErrors(t *testing.T) {
+	t.Run("unsupported operation", func(t *testing.T) {
+		publisher := &replyPublisherStub{}
+		h, err := NewRoutesValidationKafkaHandler(&routeValidationServiceStub{}, publisher, []string{"routes.replies.v1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := `{
+			"messageId":"m",
+			"correlationId":"c",
+			"type":"bus.other.v1",
+			"replyTo":"routes.replies.v1",
+			"data":{}
+		}`
+		if err := h.Handle(context.Background(), kafka.Message{Value: []byte(request)}); err != nil {
+			t.Fatal(err)
+		}
+		var response responseEnvelope
+		if err := json.Unmarshal(publisher.payload, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Error == nil || response.Error.Code != "UNSUPPORTED_OPERATION" {
+			t.Fatalf("expected unsupported operation response, got %+v", response.Error)
+		}
+	})
+
+	t.Run("publish failure", func(t *testing.T) {
+		publisher := &replyPublisherStub{err: errors.New("broker unavailable")}
+		h, err := NewRoutesValidationKafkaHandler(&routeValidationServiceStub{}, publisher, []string{"routes.replies.v1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := `{
+			"messageId":"m",
+			"correlationId":"c",
+			"type":"bus.validate.v1",
+			"replyTo":"routes.replies.v1",
+			"data":{"busId":"123e4567-e89b-12d3-a456-426614174000"}
+		}`
+		if err := h.Handle(context.Background(), kafka.Message{Value: []byte(request)}); !errors.Is(err, publisher.err) {
+			t.Fatalf("expected publish error, got %v", err)
+		}
+	})
+}

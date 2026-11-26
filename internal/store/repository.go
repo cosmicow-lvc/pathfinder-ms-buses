@@ -260,6 +260,8 @@ func mapPostgresError(err error) error {
 			return domain.ErrRUTAlreadyExists
 		case postgresError.Code == "23503" && postgresError.ConstraintName == "buses_driver_id_fkey":
 			return domain.ErrDriverNotFound
+		case postgresError.Code == "23514" && postgresError.ConstraintName == "buses_estado_check":
+			return domain.ErrInvalidInput
 		}
 	}
 	return err

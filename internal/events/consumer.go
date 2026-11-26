@@ -9,18 +9,26 @@ import (
 )
 
 type Consumer struct {
-	reader *kafka.Reader
+	reader kafkaReader
+}
+
+type kafkaReader interface {
+	FetchMessage(context.Context) (kafka.Message, error)
+	CommitMessages(context.Context, ...kafka.Message) error
+	Close() error
 }
 
 func NewConsumer(brokers []string, topic, groupID string) *Consumer {
-	return &Consumer{
-		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers:        brokers,
-			Topic:          topic,
-			GroupID:        groupID,
-			CommitInterval: 0,
-		}),
-	}
+	return newConsumer(kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          topic,
+		GroupID:        groupID,
+		CommitInterval: 0,
+	}))
+}
+
+func newConsumer(reader kafkaReader) *Consumer {
+	return &Consumer{reader: reader}
 }
 
 func (c *Consumer) Run(ctx context.Context, handle func(context.Context, kafka.Message) error) error {
