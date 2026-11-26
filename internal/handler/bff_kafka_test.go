@@ -235,10 +235,13 @@ func TestBFFKafkaHandlerRepliesInvalidRequestWithoutDispatch(t *testing.T) {
 
 func TestBFFKafkaHandlerDispatchesAllSupportedOperations(t *testing.T) {
 	tests := []struct {
-		name string
-		data string
+		name       string
+		data       string
+		wantCalled string
 	}{
-		{name: "bus.create.v1", data: `{"driverId":"123e4567-e89b-12d3-a456-426614174000","patente":"AB-123","empresa":"Empresa","estado":"activo"}`},
+		{name: "buses.bus.create", data: `{"patente":"AB-123","empresa":"Empresa","driverId":"123e4567-e89b-12d3-a456-426614174000"}`, wantCalled: "bus.create.v1"},
+		{name: "buses.bus.change-status", data: `{"id":"123e4567-e89b-12d3-a456-426614174000","estado":"EN_MANTENCION"}`, wantCalled: "bus.update.v1"},
+		{name: "bus.create.v1", data: `{"driverId":"123e4567-e89b-12d3-a456-426614174000","patente":"AB-123","empresa":"Empresa","estado":"activo"}`, wantCalled: "bus.create.v1"},
 		{name: "bus.get.v1", data: `{"busId":"123e4567-e89b-12d3-a456-426614174000"}`},
 		{name: "bus.list.v1", data: `{}`},
 		{name: "bus.update.v1", data: `{"busId":"123e4567-e89b-12d3-a456-426614174000","driverId":"123e4567-e89b-12d3-a456-426614174001","patente":"AB-123","empresa":"Empresa","estado":"activo"}`},
@@ -271,8 +274,12 @@ func TestBFFKafkaHandlerDispatchesAllSupportedOperations(t *testing.T) {
 			if err := h.Handle(context.Background(), kafka.Message{Value: request}); err != nil {
 				t.Fatal(err)
 			}
-			if svc.called != tt.name {
-				t.Fatalf("expected operation %q to be dispatched, got %q", tt.name, svc.called)
+			wantCalled := tt.wantCalled
+			if wantCalled == "" {
+				wantCalled = tt.name
+			}
+			if svc.called != wantCalled {
+				t.Fatalf("expected operation %q to be dispatched, got %q", wantCalled, svc.called)
 			}
 			var response responseEnvelope
 			if err := json.Unmarshal(publisher.payload, &response); err != nil {

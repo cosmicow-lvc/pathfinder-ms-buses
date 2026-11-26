@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cosmicow-lvc/pathfinder-ms-buses/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,23 @@ func scanBus(row rowScanner) (domain.Bus, error) {
 		&bus.UpdatedAt,
 		&bus.CreatedAt,
 	)
+	if err == nil {
+		bus.Estado = normalizeStoredBusStatus(bus.Estado)
+	}
 	return bus, err
+}
+
+func normalizeStoredBusStatus(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ACTIVO", "ACTIVA":
+		return domain.BusStatusActive
+	case "INACTIVO", "INACTIVA":
+		return domain.BusStatusInactive
+	case "EN_MANTENCION", "MANTENCION", "MANTENIMIENTO":
+		return domain.BusStatusMaintenance
+	default:
+		return strings.TrimSpace(status)
+	}
 }
 
 func scanDriver(row rowScanner) (domain.Driver, error) {
@@ -49,6 +66,7 @@ func scanDriver(row rowScanner) (domain.Driver, error) {
 }
 
 func (s *Store) CreateBus(ctx context.Context, bus domain.Bus) (domain.Bus, error) {
+	bus.Estado = normalizeStoredBusStatus(bus.Estado)
 	query := `INSERT INTO buses (driver_id, patente, empresa, estado)
 		VALUES ($1::uuid, $2, $3, $4)
 		RETURNING ` + busColumns
@@ -91,6 +109,7 @@ func (s *Store) ListBuses(ctx context.Context) ([]domain.Bus, error) {
 }
 
 func (s *Store) UpdateBus(ctx context.Context, id string, bus domain.Bus) (domain.Bus, error) {
+	bus.Estado = normalizeStoredBusStatus(bus.Estado)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.Bus{}, fmt.Errorf("begin update bus transaction: %w", err)
@@ -113,21 +132,27 @@ func (s *Store) UpdateBus(ctx context.Context, id string, bus domain.Bus) (domai
 		return domain.Bus{}, fmt.Errorf("update bus: %w", mapPostgresError(err))
 	}
 	if previousStatus != updated.Estado {
+		correlationID := domain.CorrelationIDFromContext(ctx)
 		_, err = tx.Exec(ctx, `
 			INSERT INTO outbox (evento, payload)
 			VALUES (
 				'bus.status.changed.v1',
 				jsonb_build_object(
 					'messageId', gen_random_uuid()::text,
+					'eventId', gen_random_uuid()::text,
 					'type', 'bus.status.changed.v1',
+					'eventType', 'bus.status.changed',
 					'occurredAt', transaction_timestamp(),
+					'correlationId', $4::text,
 					'data', jsonb_build_object(
 						'busId', $1::uuid,
 						'previousEstado', $2::text,
-						'estado', $3::text
+						'estado', $3::text,
+						'estadoAnterior', $2::text,
+						'estadoNuevo', $3::text
 					)
 				)
-			)`, id, previousStatus, updated.Estado)
+			)`, id, previousStatus, updated.Estado, correlationID)
 		if err != nil {
 			return domain.Bus{}, fmt.Errorf("record bus status change in outbox: %w", err)
 		}

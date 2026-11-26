@@ -1,11 +1,25 @@
 package domain
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+type correlationIDContextKey struct{}
+
+func WithCorrelationID(ctx context.Context, correlationID string) context.Context {
+	return context.WithValue(ctx, correlationIDContextKey{}, correlationID)
+}
+
+func CorrelationIDFromContext(ctx context.Context) string {
+	correlationID, _ := ctx.Value(correlationIDContextKey{}).(string)
+	return correlationID
+}
 
 const (
-	BusStatusActive      = "activo"
-	BusStatusInactive    = "inactivo"
-	BusStatusMaintenance = "mantenimiento"
+	BusStatusActive      = "ACTIVO"
+	BusStatusInactive    = "INACTIVO"
+	BusStatusMaintenance = "EN_MANTENCION"
 
 	BusValidationReasonNotFound = "BUS_NOT_FOUND"
 	BusValidationReasonInactive = "BUS_NOT_ACTIVE"
@@ -50,8 +64,10 @@ type DriverUpdateInput struct {
 }
 
 type BusValidation struct {
-	BusID  string  `json:"busId"`
-	Valid  bool    `json:"valid"`
-	Estado *string `json:"estado"`
-	Reason *string `json:"reason"`
+	BusID     string  `json:"busId"`
+	Valid     bool    `json:"valid"`
+	Exists    bool    `json:"exists"`
+	Available bool    `json:"available"`
+	Estado    *string `json:"estado"`
+	Reason    *string `json:"reason"`
 }

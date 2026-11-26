@@ -51,6 +51,7 @@ type responseEnvelope struct {
 	CorrelationID string         `json:"correlationId"`
 	Type          string         `json:"type"`
 	SentAt        string         `json:"sentAt"`
+	Ok            *bool          `json:"ok,omitempty"`
 	Data          any            `json:"data"`
 	Error         *responseError `json:"error"`
 }
@@ -94,7 +95,28 @@ func NewBFFKafkaHandler(svc BFFService, publisher KafkaReplyPublisher, replyTopi
 func (h *BFFKafkaHandler) Handle(ctx context.Context, message kafka.Message) error {
 	var request requestEnvelope
 	if err := json.Unmarshal(message.Value, &request); err != nil {
-		return fmt.Errorf("decode BFF Kafka request: %w", err)
+		slog.Error("invalid BFF Kafka JSON; skipping message", "err", err)
+		return nil
+	}
+	if request.Type == "" {
+		request.Type = bffOperationFromTopic(message.Topic)
+		if request.Type != "" && len(request.Data) == 0 {
+			request.Data = message.Value
+		}
+	}
+	if request.CorrelationID == "" {
+		request.CorrelationID = headerValue(message.Headers, "x-correlation-id")
+		if request.CorrelationID == "" {
+			request.CorrelationID = headerValue(message.Headers, "kafka_correlationId")
+		}
+	}
+	if request.ReplyTo == "" {
+		request.ReplyTo = headerValue(message.Headers, "kafka_replyTopic")
+	}
+	if request.CorrelationID == "" {
+		if generated, err := newMessageID(); err == nil {
+			request.CorrelationID = generated
+		}
 	}
 	if request.CorrelationID == "" || request.ReplyTo == "" {
 		return errors.New("BFF Kafka request is missing correlationId or replyTo")
@@ -123,18 +145,37 @@ func (h *BFFKafkaHandler) Handle(ctx context.Context, message kafka.Message) err
 	return nil
 }
 
+func bffOperationFromTopic(topic string) string {
+	switch topic {
+	case "buses.driver.list":
+		return "buses.driver.list"
+	case "buses.driver.create":
+		return "buses.driver.create"
+	case "buses.bus.list":
+		return "buses.bus.list"
+	case "buses.bus.get":
+		return "buses.bus.get"
+	case "buses.bus.create":
+		return "buses.bus.create"
+	case "buses.bus.change-status":
+		return "buses.bus.change-status"
+	default:
+		return ""
+	}
+}
+
 func (h *BFFKafkaHandler) dispatch(ctx context.Context, request requestEnvelope) commandResult {
 	var data any
 	var err error
 
 	switch request.Type {
-	case "bus.create.v1":
+	case "bus.create.v1", "buses.bus.create", "bus.create":
 		var input domain.BusInput
 		err = decodeData(request.Data, &input)
 		if err == nil {
 			data, err = h.service.CreateBus(ctx, input)
 		}
-	case "bus.get.v1":
+	case "bus.get.v1", "buses.bus.get", "bus.get":
 		var input struct {
 			BusID string `json:"busId"`
 		}
@@ -142,13 +183,48 @@ func (h *BFFKafkaHandler) dispatch(ctx context.Context, request requestEnvelope)
 		if err == nil {
 			data, err = h.service.GetBus(ctx, input.BusID)
 		}
-	case "bus.list.v1":
+	case "bus.list.v1", "buses.bus.list", "bus.list":
 		var buses []domain.Bus
 		buses, err = h.service.ListBuses(ctx)
-		data = struct {
-			Items []domain.Bus `json:"items"`
-		}{Items: buses}
-	case "bus.update.v1":
+		if err == nil {
+			var input struct {
+				IDs    []string `json:"ids"`
+				Estado string   `json:"estado"`
+			}
+			if len(request.Data) > 0 {
+				_ = decodeData(request.Data, &input)
+			}
+			if len(input.IDs) > 0 {
+				allowed := make(map[string]struct{}, len(input.IDs))
+				for _, id := range input.IDs {
+					allowed[id] = struct{}{}
+				}
+				filtered := make([]domain.Bus, 0, len(buses))
+				for _, bus := range buses {
+					if _, ok := allowed[bus.ID]; ok {
+						filtered = append(filtered, bus)
+					}
+				}
+				buses = filtered
+			}
+			if strings.TrimSpace(input.Estado) != "" {
+				filtered := make([]domain.Bus, 0, len(buses))
+				for _, bus := range buses {
+					if strings.EqualFold(bus.Estado, input.Estado) {
+						filtered = append(filtered, bus)
+					}
+				}
+				buses = filtered
+			}
+		}
+		if strings.HasSuffix(request.Type, ".v1") {
+			data = struct {
+				Items []domain.Bus `json:"items"`
+			}{Items: buses}
+		} else {
+			data = buses
+		}
+	case "bus.update.v1", "buses.bus.update", "bus.update":
 		var input struct {
 			BusID string `json:"busId"`
 			domain.BusInput
@@ -157,7 +233,31 @@ func (h *BFFKafkaHandler) dispatch(ctx context.Context, request requestEnvelope)
 		if err == nil {
 			data, err = h.service.UpdateBus(ctx, input.BusID, input.BusInput)
 		}
-	case "bus.delete.v1":
+	case "buses.bus.change-status", "bus.change-status":
+		var input struct {
+			BusID  string `json:"busId"`
+			Estado string `json:"estado"`
+			ID     string `json:"id"`
+		}
+		err = decodeData(request.Data, &input)
+		if err == nil {
+			id := input.BusID
+			if id == "" {
+				id = input.ID
+			}
+			var bus domain.Bus
+			statusCtx := domain.WithCorrelationID(ctx, request.CorrelationID)
+			bus, err = h.service.GetBus(statusCtx, id)
+			if err == nil {
+				data, err = h.service.UpdateBus(statusCtx, id, domain.BusInput{
+					DriverID: bus.DriverID,
+					Patente:  bus.Patente,
+					Empresa:  bus.Empresa,
+					Estado:   input.Estado,
+				})
+			}
+		}
+	case "bus.delete.v1", "buses.bus.delete", "bus.delete":
 		var input struct {
 			BusID string `json:"busId"`
 		}
@@ -168,13 +268,13 @@ func (h *BFFKafkaHandler) dispatch(ctx context.Context, request requestEnvelope)
 				data = map[string]any{"busId": input.BusID, "deleted": true}
 			}
 		}
-	case "driver.create.v1":
+	case "driver.create.v1", "buses.driver.create", "driver.create":
 		var input domain.DriverInput
 		err = decodeData(request.Data, &input)
 		if err == nil {
 			data, err = h.service.CreateDriver(ctx, input)
 		}
-	case "driver.get.v1":
+	case "driver.get.v1", "buses.driver.get", "driver.get":
 		var input struct {
 			DriverID string `json:"driverId"`
 		}
@@ -182,13 +282,13 @@ func (h *BFFKafkaHandler) dispatch(ctx context.Context, request requestEnvelope)
 		if err == nil {
 			data, err = h.service.GetDriver(ctx, input.DriverID)
 		}
-	case "driver.list.v1":
+	case "driver.list.v1", "buses.driver.list", "driver.list":
 		var drivers []domain.Driver
 		drivers, err = h.service.ListDrivers(ctx)
 		data = struct {
 			Items []domain.Driver `json:"items"`
 		}{Items: drivers}
-	case "driver.update.v1":
+	case "driver.update.v1", "buses.driver.update", "driver.update":
 		var input struct {
 			DriverID string `json:"driverId"`
 			domain.DriverUpdateInput
@@ -197,7 +297,7 @@ func (h *BFFKafkaHandler) dispatch(ctx context.Context, request requestEnvelope)
 		if err == nil {
 			data, err = h.service.UpdateDriver(ctx, input.DriverID, input.DriverUpdateInput)
 		}
-	case "driver.deactivate.v1":
+	case "driver.deactivate.v1", "buses.driver.deactivate", "driver.deactivate":
 		var input struct {
 			DriverID string `json:"driverId"`
 		}
@@ -236,8 +336,13 @@ func newResponse(request requestEnvelope, result commandResult) (responseEnvelop
 		Data:          result.data,
 	}
 	if result.err != nil {
+		ok := false
+		response.Ok = &ok
 		response.Data = nil
 		response.Error = commandError(result.err, request.Type)
+	} else {
+		ok := true
+		response.Ok = &ok
 	}
 	return response, nil
 }
@@ -250,21 +355,34 @@ func resultType(requestType string) string {
 }
 
 func commandError(err error, requestType string) *responseError {
+	unified := !strings.Contains(requestType, ".v1")
 	switch {
 	case errors.Is(err, domain.ErrInvalidID), errors.Is(err, domain.ErrInvalidInput):
+		if unified {
+			return &responseError{Code: "BAD_REQUEST", Message: "Solicitud invalida"}
+		}
 		return &responseError{Code: "INVALID_REQUEST", Message: "Solicitud invalida"}
 	case errors.Is(err, domain.ErrNotFound):
 		return &responseError{Code: "NOT_FOUND", Message: "Recurso no encontrado"}
 	case errors.Is(err, domain.ErrDriverNotFound):
 		return &responseError{Code: "DRIVER_NOT_FOUND", Message: "Conductor no encontrado"}
 	case errors.Is(err, domain.ErrPatenteAlreadyExists):
+		if unified {
+			return &responseError{Code: "CONFLICT", Message: "La patente ya existe"}
+		}
 		return &responseError{Code: "PATENTE_ALREADY_EXISTS", Message: "La patente ya existe"}
 	case errors.Is(err, domain.ErrRUTAlreadyExists):
+		if unified {
+			return &responseError{Code: "CONFLICT", Message: "El RUT ya existe"}
+		}
 		return &responseError{Code: "RUT_ALREADY_EXISTS", Message: "El RUT ya existe"}
 	case errors.Is(err, errUnsupportedOperation):
 		return &responseError{Code: "UNSUPPORTED_OPERATION", Message: "Operacion no soportada"}
 	default:
 		slog.Error("Kafka request failed", "type", requestType, "err", err)
+		if unified {
+			return &responseError{Code: "INTERNAL", Message: "Error interno del servidor"}
+		}
 		return &responseError{Code: "INTERNAL_ERROR", Message: "Error interno"}
 	}
 }
@@ -277,4 +395,13 @@ func newMessageID() (string, error) {
 	id[6] = (id[6] & 0x0f) | 0x40
 	id[8] = (id[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", id[0:4], id[4:6], id[6:8], id[8:10], id[10:16]), nil
+}
+
+func headerValue(headers []kafka.Header, name string) string {
+	for _, header := range headers {
+		if strings.EqualFold(header.Key, name) {
+			return strings.TrimSpace(string(header.Value))
+		}
+	}
+	return ""
 }

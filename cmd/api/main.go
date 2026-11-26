@@ -62,7 +62,7 @@ func run() (result error) {
 	if err != nil {
 		return fmt.Errorf("configure BFF Kafka handler: %w", err)
 	}
-	bffConsumer := events.NewConsumer(cfg.KafkaBrokers, cfg.KafkaCommandsTopic, cfg.KafkaConsumerGroup)
+	bffConsumer := events.NewGroupConsumer(cfg.KafkaBrokers, cfg.KafkaBFFTopics, cfg.KafkaConsumerGroup)
 	defer func() {
 		if err := bffConsumer.Close(); err != nil {
 			if result != nil {
@@ -77,7 +77,7 @@ func run() (result error) {
 	if err != nil {
 		return fmt.Errorf("configure Routes validation Kafka handler: %w", err)
 	}
-	routesConsumer := events.NewConsumer(cfg.KafkaBrokers, cfg.KafkaValidationTopic, cfg.KafkaRoutesGroup)
+	routesConsumer := events.NewGroupConsumer(cfg.KafkaBrokers, cfg.KafkaValidationTopics, cfg.KafkaRoutesGroup)
 	defer func() {
 		if err := routesConsumer.Close(); err != nil {
 			if result != nil {
@@ -116,7 +116,7 @@ func run() (result error) {
 	workers.Add(3)
 	go func() {
 		defer workers.Done()
-		slog.Info("consuming BFF Kafka commands", "topic", cfg.KafkaCommandsTopic, "group", cfg.KafkaConsumerGroup)
+		slog.Info("consuming BFF Kafka commands", "topics", cfg.KafkaBFFTopics, "group", cfg.KafkaConsumerGroup)
 		err := bffConsumer.Run(ctx, bffHandler.Handle)
 		if err == nil && ctx.Err() == nil {
 			err = errors.New("consumer stopped unexpectedly")
@@ -125,7 +125,7 @@ func run() (result error) {
 	}()
 	go func() {
 		defer workers.Done()
-		slog.Info("consuming Routes bus validations", "topic", cfg.KafkaValidationTopic, "group", cfg.KafkaRoutesGroup)
+		slog.Info("consuming Routes bus validations", "topics", cfg.KafkaValidationTopics, "group", cfg.KafkaRoutesGroup)
 		err := routesConsumer.Run(ctx, routesHandler.Handle)
 		if err == nil && ctx.Err() == nil {
 			err = errors.New("consumer stopped unexpectedly")
