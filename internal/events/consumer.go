@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/segmentio/kafka-go"
@@ -14,19 +15,33 @@ type Consumer struct {
 func NewConsumer(brokers []string, topic, groupID string) *Consumer {
 	return &Consumer{
 		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers: brokers,
-			Topic:   topic,
-			GroupID: groupID,
+			Brokers:        brokers,
+			Topic:          topic,
+			GroupID:        groupID,
+			CommitInterval: 0,
 		}),
 	}
 }
 
-func (c *Consumer) ReadMessage(ctx context.Context) (kafka.Message, error) {
-	message, err := c.reader.ReadMessage(ctx)
-	if err != nil {
-		return kafka.Message{}, fmt.Errorf("read kafka message: %w", err)
+func (c *Consumer) Run(ctx context.Context, handle func(context.Context, kafka.Message) error) error {
+	for {
+		message, err := c.reader.FetchMessage(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return fmt.Errorf("fetch kafka message: %w", err)
+		}
+		if err := handle(ctx, message); err != nil {
+			return fmt.Errorf("handle kafka message at offset %d: %w", message.Offset, err)
+		}
+		if err := c.reader.CommitMessages(ctx, message); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return fmt.Errorf("commit kafka message at offset %d: %w", message.Offset, err)
+		}
 	}
-	return message, nil
 }
 
 func (c *Consumer) Close() error {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -50,9 +51,25 @@ func run() (result error) {
 		}
 	}()
 
+	svc := service.New(db, prod)
+	bffHandler, err := handler.NewBFFKafkaHandler(svc, prod, cfg.KafkaReplyTopics)
+	if err != nil {
+		return fmt.Errorf("configure BFF Kafka handler: %w", err)
+	}
+	bffConsumer := events.NewConsumer(cfg.KafkaBrokers, cfg.KafkaCommandsTopic, cfg.KafkaConsumerGroup)
+	defer func() {
+		if err := bffConsumer.Close(); err != nil {
+			if result != nil {
+				slog.Error("close BFF Kafka consumer", "err", err)
+				return
+			}
+			result = err
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           handler.New(service.New(db, prod)),
+		Handler:           handler.New(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -60,16 +77,16 @@ func run() (result error) {
 
 	slog.Info("listening", "addr", srv.Addr, "env", cfg.Env)
 	serverErr := make(chan error, 1)
+	consumerErr := make(chan error, 1)
 	go func() {
 		serverErr <- srv.ListenAndServe()
 	}()
+	go func() {
+		slog.Info("consuming BFF Kafka commands", "topic", cfg.KafkaCommandsTopic, "group", cfg.KafkaConsumerGroup)
+		consumerErr <- bffConsumer.Run(ctx, bffHandler.Handle)
+	}()
 
-	select {
-	case err := <-serverErr:
-		if err != nil && err != http.ErrServerClosed {
-			return fmt.Errorf("serve http: %w", err)
-		}
-	case <-ctx.Done():
+	shutdownHTTP := func() error {
 		shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shCtx); err != nil {
@@ -78,6 +95,32 @@ func run() (result error) {
 		}
 		if err := <-serverErr; err != nil && err != http.ErrServerClosed {
 			return fmt.Errorf("serve http: %w", err)
+		}
+		return nil
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("serve http: %w", err)
+		}
+	case err := <-consumerErr:
+		if ctx.Err() != nil {
+			if err := shutdownHTTP(); err != nil {
+				return err
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("consume BFF Kafka commands: %w", err)
+		}
+		return errors.New("BFF Kafka consumer stopped unexpectedly")
+	case <-ctx.Done():
+		if err := shutdownHTTP(); err != nil {
+			return err
+		}
+		if err := <-consumerErr; err != nil {
+			return fmt.Errorf("stop BFF Kafka consumer: %w", err)
 		}
 	}
 	return nil

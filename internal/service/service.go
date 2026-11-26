@@ -166,6 +166,11 @@ func normalizeBus(input domain.BusInput) (domain.Bus, error) {
 	if bus.Patente == "" || bus.Empresa == "" || bus.Estado == "" {
 		return domain.Bus{}, domain.ErrInvalidInput
 	}
+	switch bus.Estado {
+	case domain.BusStatusActive, domain.BusStatusInactive, domain.BusStatusMaintenance:
+	default:
+		return domain.Bus{}, domain.ErrInvalidInput
+	}
 	return bus, nil
 }
 

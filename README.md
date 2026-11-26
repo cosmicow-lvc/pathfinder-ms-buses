@@ -11,6 +11,13 @@ patentes se guardan en mayúsculas y los RUT se guardan en mayúsculas sin punto
 para evitar duplicados causados por diferencias de formato. Eliminar un
 conductor lo desactiva (`activo = false`) para conservar sus datos.
 
+## Kafka
+
+El contrato de mensajes, topicos y respuestas esta documentado en
+[docs/kafka-contracts.md](./docs/kafka-contracts.md). El consumidor de comandos
+del BFF esta conectado; el consumidor de validaciones de Rutas y el publisher
+de eventos outbox siguen pendientes.
+
 ## Migraciones
 
 Las migraciones PostgreSQL están en `migrations/` y se ejecutan con

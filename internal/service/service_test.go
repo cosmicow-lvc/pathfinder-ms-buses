@@ -92,6 +92,24 @@ func TestCreateBusRejectsDuplicatePatente(t *testing.T) {
 	}
 }
 
+func TestCreateBusRejectsUnknownEstado(t *testing.T) {
+	repo := &repositoryStub{}
+	svc := New(repo, nil)
+
+	_, err := svc.CreateBus(context.Background(), domain.BusInput{
+		DriverID: "123e4567-e89b-12d3-a456-426614174000",
+		Patente:  "AB-123",
+		Empresa:  "Empresa",
+		Estado:   "disponible",
+	})
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected invalid input error, got %v", err)
+	}
+	if repo.busPatenteCheck != "" {
+		t.Fatal("repository should not be called for an invalid bus state")
+	}
+}
+
 func TestCreateDriverNormalizesAndRejectsDuplicateRUT(t *testing.T) {
 	repo := &repositoryStub{driverRUTExists: true}
 	svc := New(repo, nil)
