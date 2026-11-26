@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/cosmicow-lvc/pathfinder-ms-buses/internal/domain"
@@ -13,9 +14,12 @@ type bffServiceStub struct {
 	BFFService
 	createdBus   domain.Bus
 	createBusErr error
+	driverErr    error
+	called       string
 }
 
 func (s *bffServiceStub) CreateBus(_ context.Context, input domain.BusInput) (domain.Bus, error) {
+	s.called = "bus.create.v1"
 	s.createdBus = domain.Bus{
 		ID:       "123e4567-e89b-12d3-a456-426614174002",
 		DriverID: input.DriverID,
@@ -26,8 +30,55 @@ func (s *bffServiceStub) CreateBus(_ context.Context, input domain.BusInput) (do
 	return s.createdBus, s.createBusErr
 }
 
-func (s *bffServiceStub) CreateDriver(context.Context, domain.DriverInput) (domain.Driver, error) {
-	return domain.Driver{}, domain.ErrRUTAlreadyExists
+func (s *bffServiceStub) GetBus(_ context.Context, id string) (domain.Bus, error) {
+	s.called = "bus.get.v1"
+	return domain.Bus{ID: id}, nil
+}
+
+func (s *bffServiceStub) ListBuses(context.Context) ([]domain.Bus, error) {
+	s.called = "bus.list.v1"
+	return []domain.Bus{}, nil
+}
+
+func (s *bffServiceStub) UpdateBus(_ context.Context, id string, input domain.BusInput) (domain.Bus, error) {
+	s.called = "bus.update.v1"
+	return domain.Bus{
+		ID:       id,
+		DriverID: input.DriverID,
+		Patente:  input.Patente,
+		Empresa:  input.Empresa,
+		Estado:   input.Estado,
+	}, nil
+}
+
+func (s *bffServiceStub) DeleteBus(context.Context, string) error {
+	s.called = "bus.delete.v1"
+	return nil
+}
+
+func (s *bffServiceStub) CreateDriver(_ context.Context, input domain.DriverInput) (domain.Driver, error) {
+	s.called = "driver.create.v1"
+	return domain.Driver{Nombre: input.Nombre}, s.driverErr
+}
+
+func (s *bffServiceStub) GetDriver(_ context.Context, id string) (domain.Driver, error) {
+	s.called = "driver.get.v1"
+	return domain.Driver{ID: id}, nil
+}
+
+func (s *bffServiceStub) ListDrivers(context.Context) ([]domain.Driver, error) {
+	s.called = "driver.list.v1"
+	return []domain.Driver{}, nil
+}
+
+func (s *bffServiceStub) UpdateDriver(_ context.Context, id string, input domain.DriverUpdateInput) (domain.Driver, error) {
+	s.called = "driver.update.v1"
+	return domain.Driver{ID: id, Nombre: input.Nombre}, nil
+}
+
+func (s *bffServiceStub) DeactivateDriver(_ context.Context, id string) (domain.Driver, error) {
+	s.called = "driver.deactivate.v1"
+	return domain.Driver{ID: id}, nil
 }
 
 type replyPublisherStub struct {
@@ -179,5 +230,120 @@ func TestBFFKafkaHandlerRepliesInvalidRequestWithoutDispatch(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != "INVALID_REQUEST" {
 		t.Fatalf("expected INVALID_REQUEST response, got %+v", response.Error)
+	}
+}
+
+func TestBFFKafkaHandlerDispatchesAllSupportedOperations(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "bus.create.v1", data: `{"driverId":"123e4567-e89b-12d3-a456-426614174000","patente":"AB-123","empresa":"Empresa","estado":"activo"}`},
+		{name: "bus.get.v1", data: `{"busId":"123e4567-e89b-12d3-a456-426614174000"}`},
+		{name: "bus.list.v1", data: `{}`},
+		{name: "bus.update.v1", data: `{"busId":"123e4567-e89b-12d3-a456-426614174000","driverId":"123e4567-e89b-12d3-a456-426614174001","patente":"AB-123","empresa":"Empresa","estado":"activo"}`},
+		{name: "bus.delete.v1", data: `{"busId":"123e4567-e89b-12d3-a456-426614174000"}`},
+		{name: "driver.create.v1", data: `{"nombre":"Ana","telefono":"555","rut":"12345678-K"}`},
+		{name: "driver.get.v1", data: `{"driverId":"123e4567-e89b-12d3-a456-426614174000"}`},
+		{name: "driver.list.v1", data: `{}`},
+		{name: "driver.update.v1", data: `{"driverId":"123e4567-e89b-12d3-a456-426614174000","nombre":"Ana","telefono":"555","rut":"12345678-K","activo":true}`},
+		{name: "driver.deactivate.v1", data: `{"driverId":"123e4567-e89b-12d3-a456-426614174000"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &bffServiceStub{}
+			publisher := &replyPublisherStub{}
+			h, err := NewBFFKafkaHandler(svc, publisher, []string{"bff.replies.v1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := json.Marshal(requestEnvelope{
+				MessageID:     "message-1",
+				CorrelationID: "correlation-1",
+				Type:          tt.name,
+				ReplyTo:       "bff.replies.v1",
+				Data:          json.RawMessage(tt.data),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.Handle(context.Background(), kafka.Message{Value: request}); err != nil {
+				t.Fatal(err)
+			}
+			if svc.called != tt.name {
+				t.Fatalf("expected operation %q to be dispatched, got %q", tt.name, svc.called)
+			}
+			var response responseEnvelope
+			if err := json.Unmarshal(publisher.payload, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Error != nil {
+				t.Fatalf("expected successful operation response, got %+v", response.Error)
+			}
+			if response.Type != resultType(tt.name) {
+				t.Fatalf("expected response type %q, got %q", resultType(tt.name), response.Type)
+			}
+		})
+	}
+}
+
+func TestBFFKafkaHandlerReportsUnsupportedAndMalformedRequests(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		code string
+	}{
+		{
+			name: "unsupported operation",
+			body: `{"messageId":"m","correlationId":"c","type":"unknown.v1","replyTo":"bff.replies.v1","data":{}}`,
+			code: "UNSUPPORTED_OPERATION",
+		},
+		{
+			name: "invalid data",
+			body: `{"messageId":"m","correlationId":"c","type":"bus.get.v1","replyTo":"bff.replies.v1","data":"invalid"}`,
+			code: "INVALID_REQUEST",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			publisher := &replyPublisherStub{}
+			h, err := NewBFFKafkaHandler(&bffServiceStub{}, publisher, []string{"bff.replies.v1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.Handle(context.Background(), kafka.Message{Value: []byte(tt.body)}); err != nil {
+				t.Fatal(err)
+			}
+			var response responseEnvelope
+			if err := json.Unmarshal(publisher.payload, &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Error == nil || response.Error.Code != tt.code {
+				t.Fatalf("expected error %q, got %+v", tt.code, response.Error)
+			}
+		})
+	}
+}
+
+func TestCommandErrorMapsDomainErrors(t *testing.T) {
+	tests := []struct {
+		err  error
+		code string
+	}{
+		{err: domain.ErrInvalidID, code: "INVALID_REQUEST"},
+		{err: domain.ErrInvalidInput, code: "INVALID_REQUEST"},
+		{err: domain.ErrNotFound, code: "NOT_FOUND"},
+		{err: domain.ErrDriverNotFound, code: "DRIVER_NOT_FOUND"},
+		{err: domain.ErrPatenteAlreadyExists, code: "PATENTE_ALREADY_EXISTS"},
+		{err: domain.ErrRUTAlreadyExists, code: "RUT_ALREADY_EXISTS"},
+		{err: errUnsupportedOperation, code: "UNSUPPORTED_OPERATION"},
+		{err: errors.New("database unavailable"), code: "INTERNAL_ERROR"},
+	}
+
+	for _, tt := range tests {
+		got := commandError(tt.err, "test.operation.v1")
+		if got.Code != tt.code {
+			t.Errorf("commandError(%v) = %q, want %q", tt.err, got.Code, tt.code)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -87,6 +88,17 @@ func run() (result error) {
 		}
 	}()
 
+	outboxPublisher, err := events.NewOutboxPublisher(db, prod)
+	if err != nil {
+		return fmt.Errorf("configure outbox publisher: %w", err)
+	}
+
+	var workers sync.WaitGroup
+	defer func() {
+		stop()
+		workers.Wait()
+	}()
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           handler.New(svc),
@@ -97,11 +109,13 @@ func run() (result error) {
 
 	slog.Info("listening", "addr", srv.Addr, "env", cfg.Env)
 	serverErr := make(chan error, 1)
-	consumerErr := make(chan consumerResult, 2)
+	consumerErr := make(chan consumerResult, 3)
 	go func() {
 		serverErr <- srv.ListenAndServe()
 	}()
+	workers.Add(3)
 	go func() {
+		defer workers.Done()
 		slog.Info("consuming BFF Kafka commands", "topic", cfg.KafkaCommandsTopic, "group", cfg.KafkaConsumerGroup)
 		err := bffConsumer.Run(ctx, bffHandler.Handle)
 		if err == nil && ctx.Err() == nil {
@@ -110,12 +124,22 @@ func run() (result error) {
 		consumerErr <- consumerResult{name: "BFF commands", err: err}
 	}()
 	go func() {
+		defer workers.Done()
 		slog.Info("consuming Routes bus validations", "topic", cfg.KafkaValidationTopic, "group", cfg.KafkaRoutesGroup)
 		err := routesConsumer.Run(ctx, routesHandler.Handle)
 		if err == nil && ctx.Err() == nil {
 			err = errors.New("consumer stopped unexpectedly")
 		}
 		consumerErr <- consumerResult{name: "Routes validation", err: err}
+	}()
+	go func() {
+		defer workers.Done()
+		slog.Info("publishing outbox events", "topic", cfg.KafkaTopic)
+		err := outboxPublisher.Run(ctx)
+		if err == nil && ctx.Err() == nil {
+			err = errors.New("publisher stopped unexpectedly")
+		}
+		consumerErr <- consumerResult{name: "Outbox publisher", err: err}
 	}()
 
 	shutdownHTTP := func() error {
@@ -144,9 +168,11 @@ func run() (result error) {
 			if result.err != nil {
 				return fmt.Errorf("%s consumer stopped: %w", result.name, result.err)
 			}
-			other := <-consumerErr
-			if other.err != nil {
-				return fmt.Errorf("%s consumer stopped: %w", other.name, other.err)
+			for i := 0; i < 2; i++ {
+				other := <-consumerErr
+				if other.err != nil {
+					return fmt.Errorf("%s consumer stopped: %w", other.name, other.err)
+				}
 			}
 			return nil
 		}
@@ -155,7 +181,7 @@ func run() (result error) {
 		if err := shutdownHTTP(); err != nil {
 			return err
 		}
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 3; i++ {
 			result := <-consumerErr
 			if result.err != nil {
 				return fmt.Errorf("stop %s consumer: %w", result.name, result.err)

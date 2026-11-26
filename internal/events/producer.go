@@ -8,18 +8,24 @@ import (
 )
 
 type Producer struct {
-	writer *kafka.Writer
+	writer kafkaWriter
 	topic  string
 }
 
+type kafkaWriter interface {
+	WriteMessages(context.Context, ...kafka.Message) error
+	Close() error
+}
+
 func NewProducer(brokers []string, topic string) *Producer {
-	return &Producer{
-		writer: &kafka.Writer{
-			Addr:     kafka.TCP(brokers...),
-			Balancer: &kafka.LeastBytes{},
-		},
-		topic: topic,
-	}
+	return newProducer(&kafka.Writer{
+		Addr:     kafka.TCP(brokers...),
+		Balancer: &kafka.LeastBytes{},
+	}, topic)
+}
+
+func newProducer(writer kafkaWriter, topic string) *Producer {
+	return &Producer{writer: writer, topic: topic}
 }
 
 func (p *Producer) Publish(ctx context.Context, key, value []byte) error {

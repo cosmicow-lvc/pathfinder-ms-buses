@@ -91,13 +91,49 @@ func (s *Store) ListBuses(ctx context.Context) ([]domain.Bus, error) {
 }
 
 func (s *Store) UpdateBus(ctx context.Context, id string, bus domain.Bus) (domain.Bus, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Bus{}, fmt.Errorf("begin update bus transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(context.Background())
+	}()
+
+	var previousStatus string
+	if err := tx.QueryRow(ctx, `SELECT estado FROM buses WHERE id = $1::uuid FOR UPDATE`, id).Scan(&previousStatus); err != nil {
+		return domain.Bus{}, fmt.Errorf("get bus status for update: %w", mapPostgresError(err))
+	}
+
 	query := `UPDATE buses
 		SET driver_id = $2::uuid, patente = $3, empresa = $4, estado = $5, updated_at = NOW()
 		WHERE id = $1::uuid
 		RETURNING ` + busColumns
-	updated, err := scanBus(s.pool.QueryRow(ctx, query, id, bus.DriverID, bus.Patente, bus.Empresa, bus.Estado))
+	updated, err := scanBus(tx.QueryRow(ctx, query, id, bus.DriverID, bus.Patente, bus.Empresa, bus.Estado))
 	if err != nil {
 		return domain.Bus{}, fmt.Errorf("update bus: %w", mapPostgresError(err))
+	}
+	if previousStatus != updated.Estado {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO outbox (evento, payload)
+			VALUES (
+				'bus.status.changed.v1',
+				jsonb_build_object(
+					'messageId', gen_random_uuid()::text,
+					'type', 'bus.status.changed.v1',
+					'occurredAt', transaction_timestamp(),
+					'data', jsonb_build_object(
+						'busId', $1::uuid,
+						'previousEstado', $2::text,
+						'estado', $3::text
+					)
+				)
+			)`, id, previousStatus, updated.Estado)
+		if err != nil {
+			return domain.Bus{}, fmt.Errorf("record bus status change in outbox: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Bus{}, fmt.Errorf("commit bus update transaction: %w", err)
 	}
 	return updated, nil
 }
@@ -224,6 +260,8 @@ func mapPostgresError(err error) error {
 			return domain.ErrRUTAlreadyExists
 		case postgresError.Code == "23503" && postgresError.ConstraintName == "buses_driver_id_fkey":
 			return domain.ErrDriverNotFound
+		case postgresError.Code == "23514" && postgresError.ConstraintName == "buses_estado_check":
+			return domain.ErrInvalidInput
 		}
 	}
 	return err
