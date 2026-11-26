@@ -17,6 +17,17 @@ type repositoryStub struct {
 	excludedID       string
 	createdBus       domain.Bus
 	createdDriver    domain.Driver
+	busToGet         domain.Bus
+	getBusErr        error
+	getBusCalls      int
+}
+
+func (r *repositoryStub) GetBus(_ context.Context, id string) (domain.Bus, error) {
+	r.getBusCalls++
+	if r.busToGet.ID == "" && r.getBusErr == nil {
+		r.busToGet.ID = id
+	}
+	return r.busToGet, r.getBusErr
 }
 
 func (r *repositoryStub) BusPatenteExists(_ context.Context, patente, exceptID string) (bool, error) {
@@ -146,5 +157,86 @@ func TestUpdateBusExcludesCurrentIDFromPatenteCheck(t *testing.T) {
 	}
 	if repo.excludedID != id {
 		t.Fatalf("expected duplicate check to exclude %q, got %q", id, repo.excludedID)
+	}
+}
+
+func TestValidateBusRequiresExistingActiveBus(t *testing.T) {
+	const id = "123e4567-e89b-12d3-a456-426614174000"
+	tests := []struct {
+		name       string
+		bus        domain.Bus
+		repoErr    error
+		wantErr    bool
+		wantValid  bool
+		wantEstado string
+		wantReason string
+	}{
+		{
+			name:       "active bus",
+			bus:        domain.Bus{ID: id, Estado: domain.BusStatusActive},
+			wantValid:  true,
+			wantEstado: domain.BusStatusActive,
+		},
+		{
+			name:       "inactive bus",
+			bus:        domain.Bus{ID: id, Estado: domain.BusStatusMaintenance},
+			wantEstado: domain.BusStatusMaintenance,
+			wantReason: domain.BusValidationReasonInactive,
+		},
+		{
+			name:       "bus not found",
+			repoErr:    domain.ErrNotFound,
+			wantReason: domain.BusValidationReasonNotFound,
+		},
+		{
+			name:    "repository error",
+			repoErr: errors.New("database unavailable"),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &repositoryStub{busToGet: tt.bus, getBusErr: tt.repoErr}
+			svc := New(repo, nil)
+
+			result, err := svc.ValidateBus(context.Background(), id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("expected error=%t, got %v", tt.wantErr, err)
+			}
+			if tt.wantErr {
+				return
+			}
+			if result.Valid != tt.wantValid {
+				t.Fatalf("expected valid=%t, got %t", tt.wantValid, result.Valid)
+			}
+			if tt.wantEstado == "" {
+				if result.Estado != nil {
+					t.Fatalf("expected no bus status, got %q", *result.Estado)
+				}
+			} else if result.Estado == nil || *result.Estado != tt.wantEstado {
+				t.Fatalf("expected estado %q, got %v", tt.wantEstado, result.Estado)
+			}
+			if tt.wantReason == "" {
+				if result.Reason != nil {
+					t.Fatalf("expected no validation reason, got %q", *result.Reason)
+				}
+			} else if result.Reason == nil || *result.Reason != tt.wantReason {
+				t.Fatalf("expected reason %q, got %v", tt.wantReason, result.Reason)
+			}
+		})
+	}
+}
+
+func TestValidateBusRejectsInvalidUUIDBeforeRepositoryCall(t *testing.T) {
+	repo := &repositoryStub{}
+	svc := New(repo, nil)
+
+	_, err := svc.ValidateBus(context.Background(), "not-a-uuid")
+	if !errors.Is(err, domain.ErrInvalidID) {
+		t.Fatalf("expected invalid ID error, got %v", err)
+	}
+	if repo.getBusCalls != 0 {
+		t.Fatalf("repository should not be called for invalid UUID, got %d calls", repo.getBusCalls)
 	}
 }

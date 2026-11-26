@@ -10,8 +10,10 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("KAFKA_BROKERS", "localhost:9092, broker:9092")
 	t.Setenv("KAFKA_TOPIC", "buses.events.v1")
 	t.Setenv("KAFKA_BFF_COMMANDS_TOPIC", "buses.commands.v1")
+	t.Setenv("KAFKA_BUS_VALIDATION_TOPIC", "buses.validation.requests.v1")
 	t.Setenv("KAFKA_REPLY_TOPICS", "bff.replies.v1, routes.replies.v1")
 	t.Setenv("KAFKA_CONSUMER_GROUP", "test-group")
+	t.Setenv("KAFKA_ROUTES_CONSUMER_GROUP", "routes-test-group")
 }
 
 func TestLoadParsesConfiguration(t *testing.T) {
@@ -33,6 +35,9 @@ func TestLoadParsesConfiguration(t *testing.T) {
 	}
 	if cfg.KafkaCommandsTopic != "buses.commands.v1" {
 		t.Fatalf("unexpected Kafka commands topic: %q", cfg.KafkaCommandsTopic)
+	}
+	if cfg.KafkaValidationTopic != "buses.validation.requests.v1" || cfg.KafkaRoutesGroup != "routes-test-group" {
+		t.Fatalf("unexpected routes Kafka configuration: topic=%q group=%q", cfg.KafkaValidationTopic, cfg.KafkaRoutesGroup)
 	}
 	if len(cfg.KafkaReplyTopics) != 2 || cfg.KafkaReplyTopics[1] != "routes.replies.v1" {
 		t.Fatalf("unexpected Kafka reply topics: %#v", cfg.KafkaReplyTopics)

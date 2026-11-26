@@ -18,6 +18,11 @@ import (
 	"github.com/cosmicow-lvc/pathfinder-ms-buses/internal/store"
 )
 
+type consumerResult struct {
+	name string
+	err  error
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -67,6 +72,21 @@ func run() (result error) {
 		}
 	}()
 
+	routesHandler, err := handler.NewRoutesValidationKafkaHandler(svc, prod, cfg.KafkaReplyTopics)
+	if err != nil {
+		return fmt.Errorf("configure Routes validation Kafka handler: %w", err)
+	}
+	routesConsumer := events.NewConsumer(cfg.KafkaBrokers, cfg.KafkaValidationTopic, cfg.KafkaRoutesGroup)
+	defer func() {
+		if err := routesConsumer.Close(); err != nil {
+			if result != nil {
+				slog.Error("close Routes validation Kafka consumer", "err", err)
+				return
+			}
+			result = err
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           handler.New(svc),
@@ -77,13 +97,25 @@ func run() (result error) {
 
 	slog.Info("listening", "addr", srv.Addr, "env", cfg.Env)
 	serverErr := make(chan error, 1)
-	consumerErr := make(chan error, 1)
+	consumerErr := make(chan consumerResult, 2)
 	go func() {
 		serverErr <- srv.ListenAndServe()
 	}()
 	go func() {
 		slog.Info("consuming BFF Kafka commands", "topic", cfg.KafkaCommandsTopic, "group", cfg.KafkaConsumerGroup)
-		consumerErr <- bffConsumer.Run(ctx, bffHandler.Handle)
+		err := bffConsumer.Run(ctx, bffHandler.Handle)
+		if err == nil && ctx.Err() == nil {
+			err = errors.New("consumer stopped unexpectedly")
+		}
+		consumerErr <- consumerResult{name: "BFF commands", err: err}
+	}()
+	go func() {
+		slog.Info("consuming Routes bus validations", "topic", cfg.KafkaValidationTopic, "group", cfg.KafkaRoutesGroup)
+		err := routesConsumer.Run(ctx, routesHandler.Handle)
+		if err == nil && ctx.Err() == nil {
+			err = errors.New("consumer stopped unexpectedly")
+		}
+		consumerErr <- consumerResult{name: "Routes validation", err: err}
 	}()
 
 	shutdownHTTP := func() error {
@@ -104,23 +136,30 @@ func run() (result error) {
 		if err != nil && err != http.ErrServerClosed {
 			return fmt.Errorf("serve http: %w", err)
 		}
-	case err := <-consumerErr:
+	case result := <-consumerErr:
 		if ctx.Err() != nil {
 			if err := shutdownHTTP(); err != nil {
 				return err
 			}
+			if result.err != nil {
+				return fmt.Errorf("%s consumer stopped: %w", result.name, result.err)
+			}
+			other := <-consumerErr
+			if other.err != nil {
+				return fmt.Errorf("%s consumer stopped: %w", other.name, other.err)
+			}
 			return nil
 		}
-		if err != nil {
-			return fmt.Errorf("consume BFF Kafka commands: %w", err)
-		}
-		return errors.New("BFF Kafka consumer stopped unexpectedly")
+		return fmt.Errorf("%s consumer stopped: %w", result.name, result.err)
 	case <-ctx.Done():
 		if err := shutdownHTTP(); err != nil {
 			return err
 		}
-		if err := <-consumerErr; err != nil {
-			return fmt.Errorf("stop BFF Kafka consumer: %w", err)
+		for i := 0; i < 2; i++ {
+			result := <-consumerErr
+			if result.err != nil {
+				return fmt.Errorf("stop %s consumer: %w", result.name, result.err)
+			}
 		}
 	}
 	return nil
