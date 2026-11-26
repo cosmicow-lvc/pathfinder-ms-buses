@@ -6,6 +6,11 @@ El esquema define IDs UUID para `driver` y `buses`; cada bus requiere un
 conductor, y un conductor puede estar asociado a varios buses. `outbox` es una
 tabla independiente, sin claves foráneas hacia esas tablas.
 
+La lógica de servicio ofrece operaciones CRUD para buses y conductores. Las
+patentes se guardan en mayúsculas y los RUT se guardan en mayúsculas sin puntos
+para evitar duplicados causados por diferencias de formato. Eliminar un
+conductor lo desactiva (`activo = false`) para conservar sus datos.
+
 ## Migraciones
 
 Las migraciones PostgreSQL están en `migrations/` y se ejecutan con
