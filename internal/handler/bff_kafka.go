@@ -264,7 +264,7 @@ func commandError(err error, requestType string) *responseError {
 	case errors.Is(err, errUnsupportedOperation):
 		return &responseError{Code: "UNSUPPORTED_OPERATION", Message: "Operacion no soportada"}
 	default:
-		slog.Error("BFF Kafka command failed", "type", requestType, "err", err)
+		slog.Error("Kafka request failed", "type", requestType, "err", err)
 		return &responseError{Code: "INTERNAL_ERROR", Message: "Error interno"}
 	}
 }

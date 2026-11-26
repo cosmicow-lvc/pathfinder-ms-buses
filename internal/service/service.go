@@ -71,6 +71,30 @@ func (s *Service) GetBus(ctx context.Context, id string) (domain.Bus, error) {
 	return s.repo.GetBus(ctx, id)
 }
 
+func (s *Service) ValidateBus(ctx context.Context, id string) (domain.BusValidation, error) {
+	if !validUUID(id) {
+		return domain.BusValidation{}, domain.ErrInvalidID
+	}
+
+	result := domain.BusValidation{BusID: id}
+	bus, err := s.repo.GetBus(ctx, id)
+	if errors.Is(err, domain.ErrNotFound) {
+		result.Reason = stringPointer(domain.BusValidationReasonNotFound)
+		return result, nil
+	}
+	if err != nil {
+		return domain.BusValidation{}, fmt.Errorf("get bus for validation: %w", err)
+	}
+
+	result.Estado = &bus.Estado
+	if bus.Estado != domain.BusStatusActive {
+		result.Reason = stringPointer(domain.BusValidationReasonInactive)
+		return result, nil
+	}
+	result.Valid = true
+	return result, nil
+}
+
 func (s *Service) ListBuses(ctx context.Context) ([]domain.Bus, error) {
 	return s.repo.ListBuses(ctx)
 }
@@ -188,6 +212,10 @@ func normalizeDriver(nombre, telefono, rut string) (domain.Driver, error) {
 
 func normalizeRUT(rut string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(rut), ".", ""))
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func validUUID(value string) bool {

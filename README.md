@@ -14,9 +14,11 @@ conductor lo desactiva (`activo = false`) para conservar sus datos.
 ## Kafka
 
 El contrato de mensajes, topicos y respuestas esta documentado en
-[docs/kafka-contracts.md](./docs/kafka-contracts.md). El consumidor de comandos
-del BFF esta conectado; el consumidor de validaciones de Rutas y el publisher
-de eventos outbox siguen pendientes.
+[docs/kafka-contracts.md](./docs/kafka-contracts.md). Los consumidores de
+comandos del BFF y validaciones de Rutas estan conectados. La validacion
+`bus.validate.v1` responde por el `replyTo` permitido, conserva el
+`correlationId` y solo considera valido un bus existente con estado `activo`.
+El publisher de eventos outbox sigue pendiente.
 
 ## Migraciones
 

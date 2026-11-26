@@ -11,14 +11,16 @@ import (
 )
 
 type Config struct {
-	Env                string
-	Port               string
-	PostgresDSN        string
-	KafkaBrokers       []string
-	KafkaTopic         string
-	KafkaCommandsTopic string
-	KafkaReplyTopics   []string
-	KafkaConsumerGroup string
+	Env                  string
+	Port                 string
+	PostgresDSN          string
+	KafkaBrokers         []string
+	KafkaTopic           string
+	KafkaCommandsTopic   string
+	KafkaValidationTopic string
+	KafkaReplyTopics     []string
+	KafkaConsumerGroup   string
+	KafkaRoutesGroup     string
 }
 
 func Load() (Config, error) {
@@ -27,12 +29,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Env:                envOrDefault("APP_ENV", "development"),
-		Port:               envOrDefault("PORT", "8080"),
-		PostgresDSN:        strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
-		KafkaTopic:         strings.TrimSpace(os.Getenv("KAFKA_TOPIC")),
-		KafkaCommandsTopic: envOrDefault("KAFKA_BFF_COMMANDS_TOPIC", "buses.commands.v1"),
-		KafkaConsumerGroup: envOrDefault("KAFKA_CONSUMER_GROUP", "pathfinder-buses-bff-v1"),
+		Env:                  envOrDefault("APP_ENV", "development"),
+		Port:                 envOrDefault("PORT", "8080"),
+		PostgresDSN:          strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
+		KafkaTopic:           strings.TrimSpace(os.Getenv("KAFKA_TOPIC")),
+		KafkaCommandsTopic:   envOrDefault("KAFKA_BFF_COMMANDS_TOPIC", "buses.commands.v1"),
+		KafkaValidationTopic: envOrDefault("KAFKA_BUS_VALIDATION_TOPIC", "buses.validation.requests.v1"),
+		KafkaConsumerGroup:   envOrDefault("KAFKA_CONSUMER_GROUP", "pathfinder-buses-bff-v1"),
+		KafkaRoutesGroup:     envOrDefault("KAFKA_ROUTES_CONSUMER_GROUP", "pathfinder-buses-routes-v1"),
 	}
 
 	if cfg.PostgresDSN == "" {

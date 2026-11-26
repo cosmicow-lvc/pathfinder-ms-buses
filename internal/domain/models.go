@@ -6,6 +6,9 @@ const (
 	BusStatusActive      = "activo"
 	BusStatusInactive    = "inactivo"
 	BusStatusMaintenance = "mantenimiento"
+
+	BusValidationReasonNotFound = "BUS_NOT_FOUND"
+	BusValidationReasonInactive = "BUS_NOT_ACTIVE"
 )
 
 type Bus struct {
@@ -44,4 +47,11 @@ type DriverUpdateInput struct {
 	Telefono string `json:"telefono"`
 	RUT      string `json:"rut"`
 	Activo   bool   `json:"activo"`
+}
+
+type BusValidation struct {
+	BusID  string  `json:"busId"`
+	Valid  bool    `json:"valid"`
+	Estado *string `json:"estado"`
+	Reason *string `json:"reason"`
 }
