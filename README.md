@@ -18,7 +18,10 @@ El contrato de mensajes, topicos y respuestas esta documentado en
 comandos del BFF y validaciones de Rutas estan conectados. La validacion
 `bus.validate.v1` responde por el `replyTo` permitido, conserva el
 `correlationId` y solo considera valido un bus existente con estado `activo`.
-El publisher de eventos outbox sigue pendiente.
+Cuando cambia el estado de un bus, la actualizacion y el evento
+`bus.status.changed.v1` se guardan en la misma transaccion. Un publisher en
+goroutine envia los eventos pendientes a `buses.events.v1` y reintenta ante
+fallos.
 
 ## Migraciones
 

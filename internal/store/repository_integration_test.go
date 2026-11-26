@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -77,6 +78,15 @@ func TestPostgresRepositoryCRUD(t *testing.T) {
 	if bus.ID == "" || bus.DriverID != driver.ID {
 		t.Fatalf("unexpected created bus: %+v", bus)
 	}
+	t.Cleanup(func() {
+		if _, err := repo.pool.Exec(context.Background(), `DELETE FROM outbox WHERE payload->'data'->>'busId' = $1`, bus.ID); err != nil {
+			t.Errorf("clean up bus outbox events: %v", err)
+		}
+	})
+	var pendingOutboxBefore int
+	if err := repo.pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox WHERE publicado = FALSE`).Scan(&pendingOutboxBefore); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := repo.CreateBus(ctx, domain.Bus{
 		DriverID: driver.ID,
@@ -106,6 +116,99 @@ func TestPostgresRepositoryCRUD(t *testing.T) {
 	updatedBus, err := repo.UpdateBus(ctx, bus.ID, bus)
 	if err != nil || updatedBus.Empresa != bus.Empresa {
 		t.Fatalf("update bus returned %+v, err=%v", updatedBus, err)
+	}
+	var eventCount int
+	if err := repo.pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox WHERE payload->'data'->>'busId' = $1`, bus.ID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("expected no outbox event when status is unchanged, got %d", eventCount)
+	}
+
+	bus.Estado = domain.BusStatusMaintenance
+	updatedBus, err = repo.UpdateBus(ctx, bus.ID, bus)
+	if err != nil || updatedBus.Estado != domain.BusStatusMaintenance {
+		t.Fatalf("status update returned %+v, err=%v", updatedBus, err)
+	}
+	var eventType string
+	var eventKey string
+	var eventPayload []byte
+	err = repo.pool.QueryRow(ctx, `
+		SELECT evento, payload->'data'->>'busId', payload
+		FROM outbox
+		WHERE payload->'data'->>'busId' = $1
+		ORDER BY id DESC
+		LIMIT 1`, bus.ID).Scan(&eventType, &eventKey, &eventPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event struct {
+		MessageID string `json:"messageId"`
+		Type      string `json:"type"`
+		Data      struct {
+			BusID          string `json:"busId"`
+			PreviousEstado string `json:"previousEstado"`
+			Estado         string `json:"estado"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(eventPayload, &event); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "bus.status.changed.v1" || event.Type != eventType || event.MessageID == "" {
+		t.Fatalf("unexpected outbox event envelope: type=%q event=%+v", eventType, event)
+	}
+	if eventKey != bus.ID || event.Data.BusID != bus.ID ||
+		event.Data.PreviousEstado != domain.BusStatusActive ||
+		event.Data.Estado != domain.BusStatusMaintenance {
+		t.Fatalf("unexpected bus status event key/data: key=%q data=%+v", eventKey, event.Data)
+	}
+
+	bus.Empresa = "Updated without status change"
+	if _, err := repo.UpdateBus(ctx, bus.ID, bus); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox WHERE payload->'data'->>'busId' = $1`, bus.ID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("expected exactly one status event, got %d", eventCount)
+	}
+	if pendingOutboxBefore == 0 {
+		deliveryFailure := errors.New("Kafka unavailable")
+		delivered, err := repo.DeliverNextOutbox(ctx, func(context.Context, []byte, []byte) error {
+			return deliveryFailure
+		})
+		if !delivered || !errors.Is(err, deliveryFailure) {
+			t.Fatalf("expected failed publication to retain the outbox event, delivered=%t err=%v", delivered, err)
+		}
+		var published bool
+		if err := repo.pool.QueryRow(ctx, `
+			SELECT publicado FROM outbox WHERE payload->'data'->>'busId' = $1`, bus.ID).Scan(&published); err != nil {
+			t.Fatal(err)
+		}
+		if published {
+			t.Fatal("outbox event was marked published after a failed Kafka delivery")
+		}
+
+		var deliveredKey, deliveredPayload []byte
+		delivered, err = repo.DeliverNextOutbox(ctx, func(_ context.Context, key, payload []byte) error {
+			deliveredKey = append([]byte(nil), key...)
+			deliveredPayload = append([]byte(nil), payload...)
+			return nil
+		})
+		if err != nil || !delivered {
+			t.Fatalf("expected outbox event delivery, delivered=%t err=%v", delivered, err)
+		}
+		if string(deliveredKey) != bus.ID || len(deliveredPayload) == 0 {
+			t.Fatalf("unexpected delivered outbox event: key=%q payload=%s", deliveredKey, deliveredPayload)
+		}
+		if err := repo.pool.QueryRow(ctx, `
+			SELECT publicado FROM outbox WHERE payload->'data'->>'busId' = $1`, bus.ID).Scan(&published); err != nil {
+			t.Fatal(err)
+		}
+		if !published {
+			t.Fatal("outbox event was not marked as published")
+		}
 	}
 	if err := repo.DeleteBus(ctx, bus.ID); err != nil {
 		t.Fatal(err)

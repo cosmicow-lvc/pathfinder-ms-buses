@@ -139,6 +139,12 @@ La clave Kafka del evento es `busId` para conservar el orden de eventos del
 mismo bus. No se publica el evento si el estado no cambia. El evento se guarda
 en outbox en la misma transaccion que la actualizacion del bus.
 
+El publisher de outbox envia los eventos pendientes a `buses.events.v1` y los
+marca como publicados solo despues de recibir confirmacion de Kafka. Ante un
+fallo, reintenta con espera exponencial. La entrega es al menos una vez: si el
+proceso falla despues de publicar en Kafka pero antes de marcar la fila, el
+evento puede volver a publicarse; los consumidores deben ser idempotentes.
+
 ## Entrega y errores
 
 Los consumidores confirman el offset despues de procesar la solicitud y
