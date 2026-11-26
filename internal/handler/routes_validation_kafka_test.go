@@ -135,7 +135,6 @@ func TestRoutesValidationKafkaHandlerReturnsInternalError(t *testing.T) {
 		t.Fatalf("expected INTERNAL_ERROR response, got %+v", response.Error)
 	}
 }
-
 func TestRoutesValidationKafkaHandlerReportsUnsupportedAndPublishErrors(t *testing.T) {
 	t.Run("unsupported operation", func(t *testing.T) {
 		publisher := &replyPublisherStub{}

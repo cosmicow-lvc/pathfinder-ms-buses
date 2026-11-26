@@ -280,7 +280,6 @@ func TestValidateBusRejectsInvalidUUIDBeforeRepositoryCall(t *testing.T) {
 		t.Fatalf("repository should not be called for invalid UUID, got %d calls", repo.getBusCalls)
 	}
 }
-
 type eventPublisherStub struct {
 	err   error
 	key   []byte
