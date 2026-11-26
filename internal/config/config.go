@@ -16,6 +16,8 @@ type Config struct {
 	PostgresDSN        string
 	KafkaBrokers       []string
 	KafkaTopic         string
+	KafkaCommandsTopic string
+	KafkaReplyTopics   []string
 	KafkaConsumerGroup string
 }
 
@@ -29,7 +31,8 @@ func Load() (Config, error) {
 		Port:               envOrDefault("PORT", "8080"),
 		PostgresDSN:        strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
 		KafkaTopic:         strings.TrimSpace(os.Getenv("KAFKA_TOPIC")),
-		KafkaConsumerGroup: envOrDefault("KAFKA_CONSUMER_GROUP", "pathfinder-ms-buses"),
+		KafkaCommandsTopic: envOrDefault("KAFKA_BFF_COMMANDS_TOPIC", "buses.commands.v1"),
+		KafkaConsumerGroup: envOrDefault("KAFKA_CONSUMER_GROUP", "pathfinder-buses-bff-v1"),
 	}
 
 	if cfg.PostgresDSN == "" {
@@ -37,6 +40,16 @@ func Load() (Config, error) {
 	}
 	if cfg.KafkaTopic == "" {
 		return Config{}, errors.New("KAFKA_TOPIC is required")
+	}
+
+	replyTopics := envOrDefault("KAFKA_REPLY_TOPICS", "bff.replies.v1,routes.replies.v1")
+	for _, topic := range strings.Split(replyTopics, ",") {
+		if topic = strings.TrimSpace(topic); topic != "" {
+			cfg.KafkaReplyTopics = append(cfg.KafkaReplyTopics, topic)
+		}
+	}
+	if len(cfg.KafkaReplyTopics) == 0 {
+		return Config{}, errors.New("KAFKA_REPLY_TOPICS must contain at least one topic")
 	}
 
 	port, err := strconv.Atoi(cfg.Port)

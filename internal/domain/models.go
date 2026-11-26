@@ -2,18 +2,24 @@ package domain
 
 import "time"
 
+const (
+	BusStatusActive      = "activo"
+	BusStatusInactive    = "inactivo"
+	BusStatusMaintenance = "mantenimiento"
+)
+
 type Bus struct {
 	ID        string    `json:"id"`
-	DriverID  string    `json:"driver_id"`
+	DriverID  string    `json:"driverId"`
 	Patente   string    `json:"patente"`
 	Empresa   string    `json:"empresa"`
 	Estado    string    `json:"estado"`
-	UpdatedAt time.Time `json:"updated_at"`
-	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type BusInput struct {
-	DriverID string `json:"driver_id"`
+	DriverID string `json:"driverId"`
 	Patente  string `json:"patente"`
 	Empresa  string `json:"empresa"`
 	Estado   string `json:"estado"`

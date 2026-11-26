@@ -9,20 +9,28 @@ import (
 
 type Producer struct {
 	writer *kafka.Writer
+	topic  string
 }
 
 func NewProducer(brokers []string, topic string) *Producer {
 	return &Producer{
 		writer: &kafka.Writer{
 			Addr:     kafka.TCP(brokers...),
-			Topic:    topic,
 			Balancer: &kafka.LeastBytes{},
 		},
+		topic: topic,
 	}
 }
 
 func (p *Producer) Publish(ctx context.Context, key, value []byte) error {
-	if err := p.writer.WriteMessages(ctx, kafka.Message{Key: key, Value: value}); err != nil {
+	return p.PublishTo(ctx, p.topic, key, value)
+}
+
+func (p *Producer) PublishTo(ctx context.Context, topic string, key, value []byte) error {
+	if topic == "" {
+		return fmt.Errorf("publish kafka message: topic is required")
+	}
+	if err := p.writer.WriteMessages(ctx, kafka.Message{Topic: topic, Key: key, Value: value}); err != nil {
 		return fmt.Errorf("publish kafka message: %w", err)
 	}
 	return nil
