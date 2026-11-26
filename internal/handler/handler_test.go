@@ -11,6 +11,7 @@ import (
 )
 
 type fakeDatabase struct {
+	service.Repository
 	err error
 }
 
